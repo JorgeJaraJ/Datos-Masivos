@@ -1,0 +1,240 @@
+# -*- coding: utf-8 -*-
+"""
+@author: Jorge Jara
+"""
+
+#Preparación de datos K-MEANS
+#Importar librerías 
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
+from sklearn.decomposition import PCA
+
+#Importamos los datos que se utilizaran para este analisis.
+aisles = pd.read_csv("C:\\Users\\dell\\OneDrive\\Escritorio\\aisles.csv")
+prior = pd.read_csv("C:\\Users\\dell\\OneDrive\\Escritorio\\order_products__prior.csv")
+depa = pd.read_csv("C:\\Users\\dell\\OneDrive\\Escritorio\\departments.csv")
+orders = pd.read_csv("C:\\Users\\dell\\OneDrive\\Escritorio\\orders.csv")
+products = pd.read_excel("C:\\Users\\dell\\OneDrive\\Escritorio\\products.xlsx")
+
+#combinamos los datos en un solo dataframe, con el cual estaremos trabajando
+merge = pd.merge(prior, products, on='product_id')
+merge = pd.merge(merge, orders, on='order_id')
+mt_k = pd.merge(merge, aisles, on='aisle_id')
+mt_k.keys()
+mt_k.head()
+#Empezamos a preparar los datos
+mt_k.drop(['product_name'], axis = 1, inplace=True)
+mt_k.drop(['eval_set'], axis = 1, inplace=True)
+mt_k.drop(['aisle'], axis = 1, inplace=True)
+mt_k.fillna(mt_k.mean())
+mt_k.drop(['order_id'], axis = 1, inplace=True)
+mt_k.drop(['add_to_cart_order'], axis = 1, inplace=True)
+mt_k.drop(['reordered'], axis = 1, inplace=True)
+mt_k.drop(['order_dow'], axis = 1, inplace=True)
+mt_k.drop(['order_hour_of_day'], axis = 1, inplace=True)
+mt_k.drop(['days_since_prior_order'], axis = 1, inplace=True)
+mt_k.drop(['order_number'], axis = 1, inplace=True)
+
+#Estaré trabajando con un 10% de los datos que contiene el dataframe
+mt_k = mt_k[:3243448]
+
+#Ahora sigue la estandarización de nuestros datos
+scaler = StandardScaler()
+mt_k_std =scaler.fit_transform(mt_k)
+
+#Reducción de dimensionalidad con PCA
+pca = PCA()
+pca.fit(mt_k_std)
+
+#Varianza entre las variables
+pca.explained_variance_ratio_
+#Gráfico que representa dicha varianza.
+plt.figure(figsize=(10,10))
+plt.plot(range(0,4), pca.explained_variance_ratio_.cumsum(), marker = '*', linestyle = '--')
+plt.title('Varianza por componentes')
+plt.xlabel('Número de componentes')
+plt.ylabel('acumulación de varianza')
+
+#Analizando la gráfica anterior, observamos que el número optimo para trabajar es de 3
+pca= PCA(n_components=3)
+#Ajustamos al modelo, de acuerdo con los componentes que elegimos en el código anterior.
+pca.fit(mt_k_std)
+#Puntuaciones calculadas de los componentes resultantes.
+pca.transform(mt_k_std)
+#Creamos una nueva variable
+scores_pca = pca.transform(mt_k_std)
+
+"""
+Para poder combinar el PCA con k-means, primero se debe saber cuantas agrupaciones queremos
+probar, y para dicah tarea siempre es conveniente apoyarse de una Gráfica de ELBOW.
+"""
+wcss = []
+for i in range(1,11):
+    kmeans_pca = KMeans(n_clusters = i, init = 'k-means++')
+    kmeans_pca.fit(scores_pca)
+    wcss.append(kmeans_pca.inertia_)
+    
+#Mostramos el gráfico de WCSS contra el número de componentes que establecimos.
+#En esta podemos observar que 4, es el número optimo de clusters a elegir.
+plt.figure(figsize = (10,10))
+plt.plot(range(1, 11), wcss, marker = '*', linestyle = '--')
+plt.xlabel('Número de clusters')
+plt.ylabel('WCSS')
+plt.title('K-MEANS con PCA clustering')
+plt.show()
+
+#Implemenentación
+kmeans_pca = KMeans(n_clusters = 4, init = 'k-means++')
+
+#Posteriormente debemos ajustar nuestro modelo K-MEANS con el PCA
+kmeans_pca.fit(scores_pca)
+
+#Sigue crear un nuevo dataframe que incluya los valores PCA de nuestros componentes y el cluster asignado.
+df_segm_pca_kmeans = pd.concat([mt_k.reset_index(drop=True), pd.DataFrame(scores_pca)], axis=1)
+df_segm_pca_kmeans.columns.values[-3: ] = ['Componente 1', 'Componente 2', 'Componente 3']
+#Esta columna nos indicara el cluster al que pertenecen.
+df_segm_pca_kmeans['Segmento de K-MEANS con PCA'] = kmeans_pca.labels_
+#Mostramos el encabezado para verificar que todo vaya correctamente.
+df_segm_pca_kmeans.head()
+
+#Si se desea, se puede agregar un nombre a cada segmento, para así poder identificarlos mas facil.
+df_segm_pca_kmeans['Segmento'] =df_segm_pca_kmeans['Segmento de K-MEANS con PCA'].map({0:'PRIMERO',
+                                                                                       1:'SEGUNDO',
+                                                                                       2:'TERCERO',
+                                                                                       3:'CUARTO'})
+
+#Gráfico 2D respecto al componente 3 y 2.
+#Nota se requirio de diversa pruebas, para ver cual lo representaba mejor.
+x_axis = df_segm_pca_kmeans['Componente 3']
+y_axis = df_segm_pca_kmeans['Componente 2']
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x_axis, y_axis, hue= df_segm_pca_kmeans['Segmento'], palette=['g','r','b','m'])
+plt.title('Clusters con componentes del PCA')
+plt.show()
+
+#Número de datos por cluster.
+df_final = df_segm_pca_kmeans
+df_final.keys()
+#Agrupación de clusters de acuerdo al numero de datos de cada uno.
+muestras_cluster = df_final['Segmento'].value_counts()
+
+"""
+Para esta segmentación se tomaron en cuenta los siguientes rubros.
+1.-el id del usuario.
+2.-id del producto.
+3.-id del pasillo.
+4.-id del departamento.
+Con estos rubros encontré que el cluster o segmentación de clientes que cuenta con un mayor
+número de muestras es el que llamé "SEGUNDO", sin embargo para este trabajo, decidí 
+enfocar mi atención en el que tiene menos, ya que es el que menos tiene por mucho y me parecio
+interesante investigar que sucedía aquí. 
+
+Para el resto del trabajo me enfocaré en el segmento llamado "TERCERO", el cual es
+el que como ya mencioné, tiene menos muestras.
+"""
+
+#Dataframe con valores del cluster elegido.
+c_tercero = df_final.loc[:, 'Segmento'] == 'TERCERO'
+df_cluster_tercero = df_final.loc[c_tercero]
+df_cluster_tercero.head()
+
+"""
+Una vez hecho nuestro Dataframe, es hora de llevar a cabo el analisis de las caracteristicas
+de este grupo o segmento de clientes.
+"""
+#Pasillos que más frecuentan
+top_pasillos = df_cluster_tercero['aisle_id'].value_counts()
+top_pasillos = top_pasillos.to_frame()
+top_pasillos.index.name ='ID-del pasillo'
+top_pasillos.sort_values(by= ['ID-del pasillo'], inplace=True, ascending=False)
+top_pasillos.head()
+#Se puede observar que solo se visito un pasillo en este segmento.
+
+#Productos que más frecuentan.
+top_productos = df_cluster_tercero['product_id'].value_counts()
+top_productos = top_productos.to_frame()
+top_productos.index.name = 'ID-del producto'
+top_productos.set_axis(['veces que se vendio el producto'])
+top_productos.sort_values(by=['product_id'], inplace=True, ascending=False)
+top_productos.head()
+#Como se puede apreciar se tienen los 5 productos que más se consumen.
+
+"""
+Con la información que obtuvimos de los códigos anteriores, se tiene que en este segmento
+o cluster, solo se visitó el pasillo núm 86 y que los productos que más se consumen en
+este son los huevos y sus variedades en diversas marcas, lo cual me resulta curioso, ya que 
+el pasillo que se visito más en este cluster, o más bien el unico que se visito, es 
+el de los housemade, que son cosas de hogar, lo cual no me hace mucho sentido, por los productos
+que estos consumen.
+"""
+#-------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------
+
+#Implementación del modelo apriori, para ver que productos se compran juntos en este segmento.
+df_basket = df_cluster_tercero
+df_basket = pd.merge(df_basket, products, on='product_id')
+df_basket.keys()
+
+#Limpieza de nuestro Dataset.
+df_basket.drop(['department_id_y'], axis = 1, inplace=True)
+df_basket.drop(['aisle_id_y'], axis = 1, inplace=True)
+df_basket.drop(['Segmento de K-MEANS con PCA'], axis = 1, inplace=True)
+df_basket.drop(['Componente 3'], axis = 1, inplace=True)
+df_basket.drop(['Componente 2'], axis = 1, inplace=True)
+df_basket.drop(['Componente 1'], axis = 1, inplace=True)
+
+#Importamos la libreria de apriori.
+from apyori import apriori
+from mlxtend.frequent_patterns import apriori, association_rules
+
+#Dataframe a csv.
+df_basket.to_csv("analisis_canasta_ava2_evi2.csv", index=False)
+
+#Prepararemos de datos para el apriori.
+st_d = pd.read_csv("C:\\Users\\dell\\analisis_canasta_ava2_evi2.csv")
+st_d.keys()
+
+st_d1 = st_d[['user_id', 'product_name']].value_counts().reset_index()
+print(st_d1)
+st_d1['temp'] = 1
+
+#DataFrame final.
+df_final = st_d1.groupby(['user_id', 'product_name'])['temp'].sum().unstack().fillna(0)
+
+#Normalización de datos.
+
+def hot_encode(x):
+    if(x<= 0):
+        return 0
+    if(x>= 1):
+        return 1
+    
+#Función applymap, nos ayudara a aplicar la normalización de los datos al DataFrame final.
+encoded = df_final.applymap(hot_encode)
+df_final = encoded
+
+#Construcción del modelo.
+prod_compr_juntos = apriori(df_final, min_support =0.005, use_colnames = True)
+#Reglas de inferencia del DataFrame.
+rules = association_rules(prod_compr_juntos, metric = "lift", min_threshold = 1)
+rules = rules.sort_values(['confidence','lift'], ascending = [False, False])
+print(rules.head())
+    
+"""
+Como se puede apreciar, con ayuda del código anterior de apriori, nuestro analisis de
+mercado nos indica que los usuarios asignados a este cluster comprarían un producto
+perteneciente a cualquier tipo o marca de huevo y sería muy probable que el producto
+que llevara junto con este fuera tambien otro producto, perteneciente a cualquier clase de huevo,
+marca, tipo y calidad, sin embargo el resultado no fue muy alejado de lo esperado,
+ya que a lo largo de toda este analisis, vimos que el cluster en el que nos enfocamos
+siempre estuvo muy relacionado con esta clase de productos, como sugerencia para
+INSTACART, tengo que se deberían hacer diversas dinamicas en estos productos, para
+incentivar aun más su compra, ya que como pudimos ver son muy apegados a estos productos.
+"""
